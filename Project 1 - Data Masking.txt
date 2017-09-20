@@ -1,0 +1,359 @@
+Project 1 - Data Masking Using Hadoop
+
+
+A) My SQL 
+
+
+1) Load account and contact.csv into MySQL db
+
+mysql -u root -p
+
+create database original;
+
+create database masked;
+
+use original;
+
+2) Create tables for account and contact files
+
+create table account(account_id int(10), account_name varchar(30), account_phone varchar(12));
+
+create table contact(contact_id int(10),account_id int(10), First_name varchar(20), Last_name varchar(20), phone varchar(12), email varchar(30));
+
+3) Load data from csv files to tables in original database load
+
+load data local infile '/home/cloudera/Desktop/Account.csv'
+    -> into table account
+    -> fields terminated by ','
+    -> lines terminated by '\n';
+
+load data local infile '/home/cloudera/Desktop/Contact.csv'
+    -> into table contact
+    -> fields terminated by ','
+    -> lines terminated by '\n';
+
+4) Remove first row from both account and contact tables
+
+delete from account where account_id=0;
+
+delete from contact where contact_id=0;
+
+5) Check tables 
+
+select * from account;
+
+# Output:
++------------+------------------------+---------------+
+| account_id | account_name           | account_phone |
++------------+------------------------+---------------+
+|          1 | Small Company LLC      | 415-111-2222  |
+|          2 | Medium Company LLC     | 408-111-2222  |
+|          3 | Large Company LLC      | 510-111-2222  |
+|          4 | Very Large Company LLC | 650-111-2222  |
++------------+------------------------+---------------+
+
+
+select * from contact;
+
+# Output:
++------------+------------+------------+-----------+--------------+------------------+
+| contact_id | account_id | First_name | Last_name | phone        | email            |
++------------+------------+------------+-----------+--------------+------------------+
+ |        11 |          1 | John       | Smith     | 415-222-3333 | johns@gmail.com
+  |       12 |          2 | Bob        | Smith     | 408-222-3334 | Bobs@gmail.com
+ |        13 |          3 | Mark       | Taylor    | 510-222-3335 | Markt@gmail.com
+  |       14 |          4 | Pat        | Taylor    | 650-222-3336 | Patt@gmail.com
++------------+------------+------------+-----------+--------------+------------------+
+
+
+B) Hive
+
+1) Create Hive Schema 
+
+hive
+
+create schema hiveoriginal_sc
+    > location '/hivedatabase/';
+
+use hiveoriginal_sc;
+
+2) Create external tables for account and contact
+
+create external table hive_account(account_id int, account_name string, account_phone string)
+    > row format delimited
+    > fields terminated by '\t'
+    > location '/hivedatabase/account/';
+
+create external table hive_contact(contact_id int, account_id int, first_name string, last_name string, phone string, email string)
+    > row format delimited
+    > fields terminated by '\t'
+    > location '/hivedatabase/contact/';
+
+
+C) Sqoop
+
+1) Sqoop import to load data from MySQL
+
+sqoop import --connect jdbc:mysql://quickstart.cloudera/original \
+--username root --password cloudera 
+--table account 
+--hive-import 
+--hive-table hiveoriginal_sc.hive_account -m1 
+--fields-terminated-by '\t' 
+--direct;
+
+sqoop import --connect jdbc:mysql://quickstart.cloudera/original \
+--username root --password cloudera 
+--table contact 
+--hive-import 
+--hive-table hiveoriginal_sc.hive_contact -m1 
+--fields-terminated-by '\t' 
+--direct;
+
+2) Check Hive tables
+
+select * from hive_account;
+
+# Output:
+1	Small Company LLC	415-111-2222
+2	Medium Company LLC	408-111-2222
+3	Large Company LLC	510-111-2222
+4	Very Large Company LLC	650-111-2222
+
+
+select * from hive_contact;
+
+# Output:
+11	1	John	Smith	415-222-3333	johns@gmail.comr
+12	2	Bob	Smith	408-222-3334	Bobs@gmail.comr
+13	3	Mark	Taylor	510-222-3335	Markt@gmail.comr
+14	4	Pat	Taylor	650-222-3336	Patt@gmail.comr
+
+D) JAVA UDF 
+
+1) Hive UDF for masking Email 
+import java.util.Random;
+import org.apache.hadoop.hive.ql.exec.UDF;
+import org.apache.hadoop.io.Text;
+
+public class Maskemail extends UDF{
+	private static final String CHAR_LIST = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+	private static final int RANDOM_STRING_LENGTH = 10;
+	
+	public Text evaluate(Text ... input){
+		if(input == null || input.length == 0){ 
+			return null;
+		} else if(input[0] == null || input[0].getLength() == 0){
+			return new Text(input[0]);
+		} else if(input[0].toString().equalsIgnoreCase("null") || input[0].toString().equalsIgnoreCase("UNKNOWN")){
+			return new Text(input[0]);
+		}
+		
+		String email = input[0].toString();
+		String maskedEmail = null;
+		int length = 0;
+		
+		maskedEmail = generateRandomString();
+		
+		if(input.length >= 2){
+			length = (Integer.parseInt(input[1].toString()) < maskedEmail.length()) ? Integer.parseInt(input[1].toString()): maskedEmail.length();
+			maskedEmail = maskedEmail.substring(0,length).toUpperCase();
+		} else{
+			length = (maskedEmail.length() >= 10) ? 10 : maskedEmail.length();
+			maskedEmail = maskedEmail.substring(0, length).toUpperCase();
+		}
+		
+		return new Text(maskedEmail + "@null.dummy.com");
+	}
+	
+	private int getRandomNumber(){
+		int randomInt = 0;
+		Random randomGenerator = new Random();
+		randomInt = randomGenerator.nextInt(CHAR_LIST.length());
+		
+		if (randomInt - 1 == -1){
+			return randomInt;
+		}else{
+			return randomInt -1;
+		}
+	}
+	
+	public String generateRandomString(){
+		StringBuffer randStr = new StringBuffer();
+		for(int i = 0; i < RANDOM_STRING_LENGTH; i++){
+			int number = getRandomNumber();
+			char ch = CHAR_LIST.charAt(number);
+			randStr.append(ch);
+		}
+		return randStr.toString();
+	}
+	
+	private String masking_with_md5(String email){
+		return null;
+	}
+
+}
+
+2) Hive UDF for masking Phone number
+import java.util.Random;
+
+import javax.activation.UnsupportedDataTypeException;
+
+import org.apache.hadoop.hive.ql.exec.UDF;
+import org.apache.hadoop.io.Text;
+
+public class MaskNum extends UDF{
+	private static final String CHAR_LIST = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+	private static final int RANDOM_STRING_LENGTH = 12;
+	
+	public Text evaluate(Text ... input){
+		if(input == null || input.length == 0){ 
+			return null;
+		} else if(input[0] == null || input[0].getLength() == 0){
+			return new Text(input[0]);
+		} else if(input[0].toString().equalsIgnoreCase("null") || input[0].toString().equalsIgnoreCase("UNKNOWN")){
+			return new Text(input[0]);
+		}
+		
+		String num = input[0].toString();
+		String maskedNum = null;
+		int length = 0;
+		
+		maskedNum = generateRandomString();
+		
+		if(input.length >= 2){
+			length = (Integer.parseInt(input[1].toString()) < maskedNum.length()) ? Integer.parseInt(input[1].toString()): maskedNum.length();
+			maskedNum = maskedNum.substring(0,length).toUpperCase();
+		} else{
+			length = (maskedNum.length() >= 10) ? 10 : maskedNum.length();
+			maskedNum = maskedNum.substring(0, length).toUpperCase();
+		}
+		
+		return new Text(maskedNum);
+	}
+	
+	private int getRandomNumber(){
+		int randomInt = 0;
+		Random randomGenerator = new Random();
+		randomInt = randomGenerator.nextInt(CHAR_LIST.length());
+		
+		if (randomInt - 1 == -1){
+			return randomInt;
+		}else{
+			return randomInt -1;
+		}
+	}
+	
+	public String generateRandomString(){
+		StringBuffer randStr = new StringBuffer();
+		for(int i = 0; i < RANDOM_STRING_LENGTH; i++){
+			int number = getRandomNumber();
+			char ch = CHAR_LIST.charAt(number);
+			randStr.append(ch);
+		}
+		return randStr.toString();
+	}
+	
+	private String masking_with_md5(String email){
+		return null;
+	}	
+
+}
+
+E) Insert masked data with HIVE UDF functions
+
+1) Add UDF masked number file
+ADD JAR /home/cloudera/workspace/udfnum.jar;
+
+2) create temporary function encodnum
+CREATE TEMPORARY FUNCTION encodnum AS 'MaskNum';
+
+3) Insert encoded data into Hive account table
+insert overwrite table hive_account select account_id,account_name, encodnum(account_phone) from hive_account;
+
+4) Add UDF masked udf file
+ADD JAR /home/cloudera/workspace/udf.jar;
+
+5) create temporary function encod
+CREATE TEMPORARY FUNCTION encod AS 'Maskemail';
+
+6) Insert encoded data into Hive contact table
+insert overwrite table hive_contact select contact_id, account_id, first_name, last_name, encodnum(phone), encod(email) from hive_contact;
+
+
+F) Sqoop Export to MySQL db from Hive Tables
+ 
+1) Create account and contact table in masked dbs
+
+use masked;
+
+create table account like original.account;
+
+create table contact like original.contact;
+
+2) Sqoop export from Hive to MySql both tables
+
+sqoop export --connect jdbc:mysql://localhost:3306/masked 
+--table account 
+--hcatalog-table hive_account 
+--hcatalog-database hiveoriginal_sc 
+--username root --password cloudera 
+-m1;
+
+sqoop export --connect jdbc:mysql://localhost:3306/masked 
+--table contact 
+--hcatalog-table hive_contact 
+--hcatalog-database hiveoriginal_sc 
+--username root --password cloudera 
+-m1;
+
+3) Compare masked and original account and contact tables
+
+select * from account;
+
+# Output:
++------------+------------------------+---------------+
+| account_id | account_name           | account_phone |
++------------+------------------------+---------------+
+|          1 | Small Company LLC      | 5SL7X2MIM7    |
+|          2 | Medium Company LLC     | GXMMOHO5I5    |
+|          3 | Large Company LLC      | APHLWRGL47    |
+|          4 | Very Large Company LLC | 7HI23SDI9O    |
++------------+------------------------+---------------+
+
+select * from original.account;
+
+# Output:
++------------+------------------------+---------------+
+| account_id | account_name           | account_phone |
++------------+------------------------+---------------+
+|          1 | Small Company LLC      | 415-111-2222  |
+|          2 | Medium Company LLC     | 408-111-2222  |
+|          3 | Large Company LLC      | 510-111-2222  |
+|          4 | Very Large Company LLC | 650-111-2222  |
++------------+------------------------+---------------+
+
+select * from contact;
+
+# Output:
++------------+------------+------------+-----------+------------+---------------------------+
+| contact_id | account_id | First_name | Last_name | phone      | email                     |
++------------+------------+------------+-----------+------------+---------------------------+
+|         11 |          1 | John       | Smith     | EG3ZMSXNOK | 3HQGYN35P3@null.dummy.com |
+|         12 |          2 | Bob        | Smith     | FAJCOIW7Y2 | ZKHVGZBPZG@null.dummy.com |
+|         13 |          3 | Mark       | Taylor    | SPBW5NU1GA | NU4OXLYV8I@null.dummy.com |
+|         14 |          4 | Pat        | Taylor    | PDDQB8FLBB | YVXTHMMN3B@null.dummy.com |
++------------+------------+------------+-----------+------------+---------------------------+
+
+select * from original.contact;
++------------+------------+------------+-----------+--------------+------------------+
+| contact_id | account_id | First_name | Last_name | phone        | email            |
++------------+------------+------------+-----------+--------------+------------------+
+ |        11 |          1 | John       | Smith     | 415-222-3333 | johns@gmail.com
+  |       12 |          2 | Bob        | Smith     | 408-222-3334 | Bobs@gmail.com
+ |        13 |          3 | Mark       | Taylor    | 510-222-3335 | Markt@gmail.com
+  |       14 |          4 | Pat        | Taylor    | 650-222-3336 | Patt@gmail.com
++------------+------------+------------+-----------+--------------+------------------+
+
+
+
